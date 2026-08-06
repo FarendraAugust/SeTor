@@ -1,0 +1,52 @@
+# Template stack worker per VPS (identik di semua node; beda hanya di env file).
+#   cp deploy/env/node1.env.example .env && docker compose up -d --build
+# Profil "proxy" mengaktifkan Caddy (TLS) untuk publik — opsional, butuh domain.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${PG_USER:-setor}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD di .env}
+      POSTGRES_DB: ${PG_SHARED_DB:-setor_shared}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-setor} -d ${PG_SHARED_DB:-setor_shared}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./worker
+    image: setor-worker:${TAG:-latest}
+    env_file: .env
+    environment:
+      PORT: 3101
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${WORKER_PORT:-3101}:3101"
+    restart: unless-stopped
+
+  caddy:
+    profiles: ["proxy"]
+    image: caddy:2-alpine
+    depends_on:
+      - worker
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      WORKER_DOMAIN: ${WORKER_DOMAIN:-}
+    volumes:
+      - ./deploy/Caddyfile.worker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:

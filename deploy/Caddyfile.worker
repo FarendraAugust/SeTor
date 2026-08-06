@@ -1,0 +1,4 @@
+{$WORKER_DOMAIN} {
+	# Worker API + SSE di balik HTTPS (CORS diset di env worker)
+	reverse_proxy worker:3101
+}

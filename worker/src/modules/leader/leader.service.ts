@@ -192,7 +192,7 @@ async function probePeers(): Promise<number> {
       const info = await httpGet(`${peer.publicUrl}/internal/heartbeat?workerId=${encodeURIComponent(me.workerId)}&term=${me.term}&isLeader=${me.isLeader}&leaderId=${encodeURIComponent(me.leaderId ?? '')}&publicUrl=${encodeURIComponent(me.publicUrl)}`)
       if (!info) throw new Error('unreachable')
       handlePeerInfo(peerId, info)
-      // Daftarkan peer di registry lokal (follower tidak pernah probe → row-nya dibuat di sini)
+      // Daftarkan peer di registry lokal (follower juga probe, jadi semua node selalu sinkron)
       if (info.workerId && info.workerId !== env.workerId) {
         await dbShared.insert(workers).values({
           id: String(info.workerId),
@@ -282,6 +282,8 @@ async function tick() {
 
   const leaderAlive = currentLeaderId != null && currentLeaderId !== env.workerId && now - lastSeenLeaderAt < TIMEOUT
   if (state === 'follower' && leaderAlive) {
+    // Follower ikut probe semua peer agar registry (leader/offline/term) konsisten di tiap node
+    await probePeers()
     await touchRow()
     return
   }

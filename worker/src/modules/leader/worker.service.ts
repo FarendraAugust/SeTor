@@ -9,7 +9,8 @@ const ONLINE_TIMEOUT = 45_000
 
 function withStatus(w: Worker) {
   const isOnline = Date.now() - w.lastHeartbeat.getTime() < ONLINE_TIMEOUT
-  return { ...w, isOnline }
+  // Node offline tidak pernah bisa membersihkan flag leader-nya sendiri → turunkan di lapisan read
+  return { ...w, isOnline, isLeader: w.isLeader && isOnline }
 }
 
 export const WorkerService = {

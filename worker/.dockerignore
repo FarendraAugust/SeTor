@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.env.*
+worker-1
+*.log
+.git
+.dockerignore
+Dockerfile
+scripts

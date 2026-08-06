@@ -1,0 +1,32 @@
+# Dashboard berjalan di SATU VPS (mis. VPS node1). Jalankan:
+#   cp deploy/env/dashboard.env.example .env && docker compose -f compose.dashboard.yaml up -d --build
+# NEXT_PUBLIC_* DI-INLINE SAAT BUILD — ubah URL worker di sini lalu rebuild image.
+services:
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: ${DASH_DOCKERFILE:-Dockerfile}
+      args:
+        NEXT_PUBLIC_WORKER_URL: ${NEXT_PUBLIC_WORKER_URL:?wajib di .env}
+        NEXT_PUBLIC_WORKER_URLS: ${NEXT_PUBLIC_WORKER_URLS:?wajib di .env}
+    image: setor-dashboard:${TAG:-latest}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - dashboard
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DASH_DOMAIN: ${DASH_DOMAIN:-}
+    volumes:
+      - ./deploy/Caddyfile.dashboard:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
