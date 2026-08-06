@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { dbShared } from '../../database/shared.js'
 import { notifications } from './notification.schema.js'
+import { ReplicationService } from '../replication/replication.service.js'
 import type { Notification, NewNotification } from './notification.types.js'
 
 export const NotificationRepository = {
@@ -16,15 +17,20 @@ export const NotificationRepository = {
     return dbShared.select().from(notifications).where(eq(notifications.id, id)).then((r) => r[0])
   },
 
-  create(data: Partial<NewNotification>): Promise<Notification> {
-    return dbShared.insert(notifications).values(data as NewNotification).returning().then((r) => r[0])
+  async create(data: Partial<NewNotification>): Promise<Notification> {
+    const [row] = await dbShared.insert(notifications).values(data as NewNotification).returning()
+    await ReplicationService.record('notifications', 'insert', row as unknown as Record<string, unknown>)
+    return row
   },
 
-  update(id: number, data: Partial<NewNotification>): Promise<Notification | undefined> {
-    return dbShared.update(notifications).set(data).where(eq(notifications.id, id)).returning().then((r) => r[0])
+  async update(id: number, data: Partial<NewNotification>): Promise<Notification | undefined> {
+    const [row] = await dbShared.update(notifications).set(data).where(eq(notifications.id, id)).returning()
+    if (row) await ReplicationService.record('notifications', 'update', row as unknown as Record<string, unknown>)
+    return row
   },
 
-  remove(id: number): Promise<void> {
-    return dbShared.delete(notifications).where(eq(notifications.id, id)).then(() => {})
+  async remove(id: number): Promise<void> {
+    await dbShared.delete(notifications).where(eq(notifications.id, id))
+    await ReplicationService.record('notifications', 'delete', { id })
   },
 } as const

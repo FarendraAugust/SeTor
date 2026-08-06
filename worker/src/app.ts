@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { env } from './config/env.js'
 import { errorHandler } from './common/middleware/error-handler.js'
+import { leaderProxy } from './common/middleware/leader-proxy.js'
 import { registerModules } from './modules/index.js'
 
 export function createApp() {
@@ -13,6 +14,7 @@ export function createApp() {
     credentials: true,
   }))
   app.use('*', logger())
+  app.use('*', leaderProxy)
   app.onError(errorHandler)
 
   registerModules(app)

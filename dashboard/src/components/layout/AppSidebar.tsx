@@ -20,6 +20,7 @@ import {
   FileText,
   Settings,
   Clock,
+  RadioTower,
 } from 'lucide-react'
 
 const icons: Record<string, React.ReactNode> = {
@@ -28,6 +29,7 @@ const icons: Record<string, React.ReactNode> = {
   file: <FileText className="size-4" />,
   settings: <Settings className="size-4" />,
   clock: <Clock className="size-4" />,
+  radar: <RadioTower className="size-4" />,
 }
 
 export function AppSidebar() {

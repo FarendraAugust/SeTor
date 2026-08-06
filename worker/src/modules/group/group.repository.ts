@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { dbShared } from '../../database/shared.js'
 import { monitorGroups } from './group.schema.js'
+import { ReplicationService } from '../replication/replication.service.js'
 import type { MonitorGroup, NewMonitorGroup } from './group.types.js'
 
 export const GroupRepository = {
@@ -12,15 +13,20 @@ export const GroupRepository = {
     return dbShared.select().from(monitorGroups).where(eq(monitorGroups.id, id)).then((r) => r[0])
   },
 
-  create(data: Partial<NewMonitorGroup>): Promise<MonitorGroup> {
-    return dbShared.insert(monitorGroups).values(data as NewMonitorGroup).returning().then((r) => r[0])
+  async create(data: Partial<NewMonitorGroup>): Promise<MonitorGroup> {
+    const [row] = await dbShared.insert(monitorGroups).values(data as NewMonitorGroup).returning()
+    await ReplicationService.record('monitor_groups', 'insert', row as unknown as Record<string, unknown>)
+    return row
   },
 
-  update(id: number, data: Partial<NewMonitorGroup>): Promise<MonitorGroup | undefined> {
-    return dbShared.update(monitorGroups).set(data).where(eq(monitorGroups.id, id)).returning().then((r) => r[0])
+  async update(id: number, data: Partial<NewMonitorGroup>): Promise<MonitorGroup | undefined> {
+    const [row] = await dbShared.update(monitorGroups).set(data).where(eq(monitorGroups.id, id)).returning()
+    if (row) await ReplicationService.record('monitor_groups', 'update', row as unknown as Record<string, unknown>)
+    return row
   },
 
-  remove(id: number): Promise<void> {
-    return dbShared.delete(monitorGroups).where(eq(monitorGroups.id, id)).then(() => {})
+  async remove(id: number): Promise<void> {
+    await dbShared.delete(monitorGroups).where(eq(monitorGroups.id, id))
+    await ReplicationService.record('monitor_groups', 'delete', { id })
   },
 } as const

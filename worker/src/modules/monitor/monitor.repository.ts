@@ -1,11 +1,28 @@
-import { desc, sql, eq, and, gte } from 'drizzle-orm'
+import { desc, sql, eq, and, gte, gt, lt } from 'drizzle-orm'
 import { dbLocal } from '../../database/local.js'
 import { monitoring } from './monitor.schema.js'
 import type { Monitoring, NewMonitoring, MonitorStats, TargetStatus } from './monitor.types.js'
 
 export const MonitorRepository = {
-  insert(data: NewMonitoring): Promise<void> {
-    return dbLocal.insert(monitoring).values(data).then(() => {})
+  async insert(data: NewMonitoring): Promise<Monitoring> {
+    try {
+      const [row] = await dbLocal.insert(monitoring).values(data).returning()
+      return row
+    } catch (e: any) {
+      console.error('[monitor] insert failed:', JSON.stringify({ ...(data as object), id: (data as any).id ?? 'auto' }), e?.message)
+      throw e
+    }
+  },
+
+  /** Insert batch hasil (dari worker sendiri atau push worker lain) — dedup aman. */
+  insertMany(data: NewMonitoring[]): Promise<void> {
+    if (data.length === 0) return Promise.resolve()
+    return dbLocal.insert(monitoring).values(data).onConflictDoNothing()
+      .then(() => {})
+      .catch((e: any) => {
+        console.error(`[monitor] insertMany failed (${data.length} rows, has id: ${data.some((d) => (d as any).id != null)})`, e?.message)
+        throw e
+      })
   },
 
   recent(limit = 50): Promise<Monitoring[]> {
@@ -86,8 +103,21 @@ export const MonitorRepository = {
       .then((r) => ({ total: r[0]?.total ?? 0, up: r[0]?.up ?? 0 }))
   },
 
+  /** Hasil monitoring milik worker ini setelah timestamp tertentu (untuk push ke leader). */
+  rowsSince(since: Date, workerId: string, limit = 2000): Promise<Monitoring[]> {
+    return dbLocal.select().from(monitoring)
+      .where(and(eq(monitoring.workerId, workerId), gt(monitoring.checkedAt, since)))
+      .orderBy(monitoring.checkedAt)
+      .limit(limit)
+  },
+
   removeByTarget(targetId: number): Promise<void> {
     return dbLocal.delete(monitoring).where(eq(monitoring.targetId, targetId)).then(() => {})
+  },
+
+  /** Prune hasil lama (retention). */
+  prune(olderThan: Date): Promise<void> {
+    return dbLocal.delete(monitoring).where(lt(monitoring.checkedAt, olderThan)).then(() => {})
   },
 
   async perTargetStats(): Promise<Array<{

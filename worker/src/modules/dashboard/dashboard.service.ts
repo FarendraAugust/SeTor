@@ -1,66 +1,87 @@
-import { env } from '../../config/env.js'
+import { desc, eq, sql } from 'drizzle-orm'
+import { dbLocal } from '../../database/local.js'
 import { WorkerService } from '../leader/worker.service.js'
 import { TargetService } from '../target/target.service.js'
 import { MonitorService } from '../monitor/monitor.service.js'
+import { AnalysisService } from '../analysis/analysis.service.js'
+import { monitoring } from '../monitor/monitor.schema.js'
 
-async function fetchWorkerData(baseUrl: string) {
-  const headers = { Authorization: `Bearer ${env.internalToken}` }
-  const [statsRes, targetsRes, recentRes] = await Promise.all([
-    fetch(`${baseUrl}/monitoring/stats`, { headers }),
-    fetch(`${baseUrl}/monitoring/targets`, { headers }),
-    fetch(`${baseUrl}/monitoring?limit=20`, { headers }),
-  ])
-  const [stats, targets, recent] = await Promise.all([
-    statsRes.json(),
-    targetsRes.json(),
-    recentRes.json(),
-  ])
-  return { stats: stats.stats, targets: targets.targets, recent: recent.results }
+async function perWorkerStats() {
+  const rows = await dbLocal.select({
+    workerId: monitoring.workerId,
+    total: sql<number>`count(*)::int`,
+    up: sql<number>`count(*) FILTER (WHERE status = 'up')::int`,
+    down: sql<number>`count(*) FILTER (WHERE status = 'down')::int`,
+    avgResponseTime: sql<number | null>`avg(response_time) FILTER (WHERE status = 'up')`,
+  }).from(monitoring).groupBy(monitoring.workerId)
+
+  return rows.map((r) => ({
+    workerId: r.workerId,
+    total: r.total,
+    up: r.up,
+    down: r.down,
+    avgResponseTime: r.avgResponseTime != null ? Math.round(r.avgResponseTime) : null,
+  }))
+}
+
+async function perWorkerLatestTargets() {
+  const rows = await dbLocal.select()
+    .from(monitoring)
+    .orderBy(desc(monitoring.checkedAt))
+  const map = new Map<string, Map<number, { status: string; lastCheckedAt: Date }>>()
+  for (const r of rows) {
+    const byTarget = map.get(r.workerId) ?? new Map()
+    if (!byTarget.has(r.targetId)) {
+      byTarget.set(r.targetId, { status: r.status, lastCheckedAt: r.checkedAt })
+    }
+    map.set(r.workerId, byTarget)
+  }
+  const out: Record<string, Array<{ targetId: number; status: string; lastCheckedAt: string }>> = {}
+  for (const [wid, targets] of map) {
+    out[wid] = [...targets.entries()].map(([targetId, v]) => ({
+      targetId,
+      status: v.status,
+      lastCheckedAt: v.lastCheckedAt.toISOString(),
+    }))
+  }
+  return out
 }
 
 export const DashboardService = {
   async overview() {
     const me = await WorkerService.me()
-    const [workers, targets, localStats, localTargets] = await Promise.all([
+    const [workers, targets, stats, workerStats, workerTargets] = await Promise.all([
       WorkerService.list(),
       TargetService.list(),
       MonitorService.stats(),
-      MonitorService.targets(),
+      perWorkerStats(),
+      perWorkerLatestTargets(),
     ])
 
-    const workersData = { [me.id]: { stats: localStats, targets: localTargets } }
-
-    if (me.isLeader) {
-      const others = workers.filter((w) => w.id !== me.id && w.isOnline)
-      await Promise.all(
-        others.map(async (w) => {
-          try {
-            workersData[w.id] = await fetchWorkerData(`http://${w.host}:${w.port}`)
-          } catch {
-            workersData[w.id] = { stats: null, targets: [] } as never
-          }
-        }),
-      )
+    const workersData: Record<string, { stats: unknown; targets: unknown[] }> = {}
+    for (const ws of workerStats) {
+      workersData[ws.workerId] = { stats: ws, targets: workerTargets[ws.workerId] ?? [] }
+    }
+    if (!workersData[me.id]) {
+      workersData[me.id] = { stats: null, targets: [] }
     }
 
-    return { me, workers, targets, workersData }
+    return { me, workers, targets, workersData, stats }
   },
 
   async health() {
-    const [workers, targets, localStats] = await Promise.all([
+    const [workers, targets, stats] = await Promise.all([
       WorkerService.list(),
       TargetService.list(),
-      MonitorService.stats(),
+      AnalysisService.stats(),
     ])
 
-    const upTargets = localStats.up
-    const downTargets = localStats.down
     const totalTargets = targets.filter((t) => t.enabled).length
 
     return {
       workers: { total: workers.length, online: workers.filter((w) => w.isOnline).length },
-      targets: { total: totalTargets, up: upTargets, down: downTargets },
-      uptime: localStats.uptime,
+      targets: { total: totalTargets, up: stats.up, down: stats.down, degraded: stats.degraded },
+      uptime: stats.total === 0 ? 0 : Math.round((stats.up / stats.total) * 100),
     }
   },
 } as const

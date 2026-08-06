@@ -15,7 +15,6 @@ export const authGuard: MiddlewareHandler = async (c, next) => {
   if (!header?.startsWith('Bearer ')) return c.json({ error: 'unauthorized' }, 401)
 
   const token = header.slice(7)
-  if (token === env.internalToken) return next()
 
   try {
     const payload = await verify(token, env.jwtSecret, 'HS256') as JwtPayload

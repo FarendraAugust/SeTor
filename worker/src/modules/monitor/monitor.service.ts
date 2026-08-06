@@ -4,7 +4,9 @@ import { MonitorRepository } from './monitor.repository.js'
 import { bus } from '../bus/bus.service.js'
 import { HttpError } from '../../common/errors/http-error.js'
 import { runCheck, type CheckResult } from './monitor.checkers.js'
-import { NotificationService } from '../notification/notification.service.js'
+import { LeaderService } from '../leader/leader.service.js'
+import { AnalysisService } from '../analysis/analysis.service.js'
+import { SyncService } from '../internal/sync.service.js'
 import type { Target, Monitor, MonitorType, MonitorStatus, Heartbeat, Certificate } from '../target/target.types.js'
 
 const UPTIME_PERIODS: Record<string, number> = {
@@ -17,9 +19,7 @@ const UPTIME_PERIODS: Record<string, number> = {
 type CertCacheEntry = { cert: Certificate; fetchedAt: number }
 
 const certCache = new Map<number, CertCacheEntry>()
-const lastStatus = new Map<number, string>()
-const lastNotifyAt = new Map<number, number>()
-const suppressedNotify = new Map<number, boolean>()
+let monitorStarted = false
 
 async function fetchCertificate(targetId: number, host: string, port: number) {
   try {
@@ -73,6 +73,10 @@ function getCertificate(target: Target): Certificate | undefined {
   return undefined
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
 export const MonitorService = {
   async checkTarget(target: Target) {
     const started = performance.now()
@@ -91,36 +95,30 @@ export const MonitorService = {
       }
     }
 
-    const status = result.status as MonitorStatus
-    const prev = lastStatus.get(target.id)
-
-    if (target.type === 'push') {
-      await MonitorRepository.insert({
-        targetId: target.id,
-        targetName: target.name,
-        status,
-        responseTime: result.responseTime,
-        statusCode: result.statusCode,
-        ping: result.ping,
-        error: result.error,
-        checkedAt,
-        workerId: env.workerId,
-      })
-    } else if (status !== prev || !prev) {
-      await MonitorRepository.insert({
-        targetId: target.id,
-        targetName: target.name,
-        status,
-        responseTime: result.responseTime,
-        statusCode: result.statusCode,
-        ping: result.ping,
-        error: result.error,
-        checkedAt,
-        workerId: env.workerId,
-      })
+    // Retry sebelum menyatakan down (Kuma behavior: retries kali sebelum down)
+    const retries = target.retries ?? 0
+    if (result.status === 'down' && retries > 0 && target.type !== 'push') {
+      for (let i = 0; i < retries; i++) {
+        await sleep(500)
+        result = await runCheck(target, checkedAt)
+        if (result.status === 'up') break
+      }
     }
 
-    lastStatus.set(target.id, status)
+    const status = result.status as MonitorStatus
+
+    // Simpan SETIAP hasil check (basis uptime & konsensus yang akurat)
+    const row = await MonitorRepository.insert({
+      targetId: target.id,
+      targetName: target.name,
+      status,
+      responseTime: result.responseTime,
+      statusCode: result.statusCode,
+      ping: result.ping,
+      error: result.error,
+      checkedAt,
+      workerId: env.workerId,
+    })
 
     const busEvent = {
       targetId: target.id,
@@ -134,29 +132,9 @@ export const MonitorService = {
 
     await bus.emit('monitoring', 'monitoring.result', busEvent)
 
-    if (status !== 'pending' && (prev === undefined || status !== prev)) {
-      const now = Date.now()
-      const last = lastNotifyAt.get(target.id) ?? 0
-      const intervalOk = now - last >= (target.notificationInterval ?? 60) * 1000 || target.resendNotification
-      const threshold = target.notificationThreshold
-      const wasSuppressed = suppressedNotify.get(target.id) ?? false
-      const belowThreshold = status === 'down' && threshold != null && result.responseTime < threshold
-
-      if (belowThreshold) {
-        suppressedNotify.set(target.id, true)
-      } else {
-        suppressedNotify.set(target.id, false)
-        if (intervalOk && !(status === 'up' && wasSuppressed)) {
-          lastNotifyAt.set(target.id, now)
-          void NotificationService.dispatch({
-            target,
-            status,
-            responseTime: result.responseTime,
-            error: result.error,
-            checkedAt,
-          })
-        }
-      }
+    // Leader: proses konsensus langsung (dari hasil sendiri)
+    if (LeaderService.isLeader()) {
+      void AnalysisService.onResults([row])
     }
 
     return busEvent
@@ -164,25 +142,66 @@ export const MonitorService = {
 
   async runLoop() {
     const targets = await TargetRepository.findEnabled()
-    await Promise.all(targets.map((t) => this.checkTarget(t)))
+    // allSettled: satu target error tidak boleh menghentikan target lain
+    await Promise.allSettled(targets.map((t) => this.checkTarget(t)))
+
+    // Follower: kirim hasil baru ke leader
+    if (!LeaderService.isLeader()) {
+      void SyncService.pushResults()
+    }
+
+    // Prune retention (periodik — setiap 10x interval)
+    if (Math.floor(Date.now() / (env.checkInterval * 10_000)) % 10 === 0) {
+      const cutoff = new Date(Date.now() - env.retentionDays * 24 * 3600 * 1000)
+      void MonitorRepository.prune(cutoff)
+    }
   },
 
   start() {
+    if (monitorStarted) return
+    monitorStarted = true
     const interval = env.checkInterval * 1000
-    this.runLoop().then(() => {
-      setInterval(() => this.runLoop(), interval)
-    })
+    // Jitter antar node agar tidak thundering herd ke target yang sama (hanya di cluster)
+    const hasPeers = LeaderService.peers().length > 0
+    const jitterMs = hasPeers ? hashWorkerId() % interval : 0
+    setTimeout(() => {
+      this.runLoop().then(() => {
+        setInterval(() => this.runLoop().catch((e: any) => console.error('[monitor] loop error:', e?.message)), interval)
+      }).catch((e: any) => console.error('[monitor] first loop error:', e?.message))
+    }, jitterMs)
   },
 
   recent(limit?: number) {
     return MonitorRepository.recent(limit)
   },
 
-  stats() {
+  async stats() {
+    if (LeaderService.isLeader()) {
+      const s = await AnalysisService.stats()
+      return {
+        total: s.total,
+        up: s.up,
+        down: s.down,
+        avgResponseTime: s.avgResponseTime,
+        uptime: s.total === 0 ? 0 : Math.round((s.up / s.total) * 100),
+        lastCheckedAt: s.lastCheckedAt,
+      }
+    }
     return MonitorRepository.stats()
   },
 
-  targets() {
+  async targets() {
+    if (LeaderService.isLeader()) {
+      const states = await AnalysisService.perTargetStats()
+      return states.map((s) => ({
+        targetId: s.targetId,
+        targetName: String(s.targetId),
+        status: s.status,
+        responseTime: s.responseTime,
+        statusCode: null,
+        lastCheckedAt: s.lastCheckedAt,
+      }))
+    }
     return MonitorRepository.latestByTarget()
   },
 
@@ -191,6 +210,9 @@ export const MonitorService = {
   },
 
   async uptime(targetId: number, period: string): Promise<number> {
+    if (LeaderService.isLeader()) {
+      return AnalysisService.uptime(targetId, period)
+    }
     const ms = UPTIME_PERIODS[period]
     if (!ms) throw HttpError.badRequest(`invalid period, must be one of: ${Object.keys(UPTIME_PERIODS).join(', ')}`)
     const since = new Date(Date.now() - ms)
@@ -200,7 +222,9 @@ export const MonitorService = {
 
   async monitors(includeAll = false): Promise<Monitor[]> {
     const targets = includeAll ? await TargetRepository.findAll() : await TargetRepository.findEnabled()
-    const stats = await MonitorRepository.perTargetStats()
+    const stats = LeaderService.isLeader()
+      ? await AnalysisService.perTargetStats()
+      : await MonitorRepository.perTargetStats()
     const statMap = new Map(stats.map((s) => [s.targetId, s]))
     const monitors: Monitor[] = []
 
@@ -214,19 +238,24 @@ export const MonitorService = {
   async monitorById(id: number): Promise<Monitor> {
     const target = await TargetRepository.findById(id)
     if (!target) throw HttpError.notFound('monitor not found')
-    const stats = await MonitorRepository.perTargetStats()
+    const stats = LeaderService.isLeader()
+      ? await AnalysisService.perTargetStats()
+      : await MonitorRepository.perTargetStats()
     return this.toMonitor(target, stats.find((s) => s.targetId === id))
   },
 
   async heartbeats(targetId: number, limit = 120): Promise<Heartbeat[]> {
     await this.monitorById(targetId)
-    const rows = await MonitorRepository.timeline(targetId, Math.min(limit, 500))
+    const capped = Math.min(limit, 500)
+    const rows = LeaderService.isLeader()
+      ? await AnalysisService.timeline(targetId, capped)
+      : await MonitorRepository.timeline(targetId, capped)
     return rows.map((r) => ({
       time: r.checkedAt.toISOString(),
       status: (r.status as MonitorStatus) || 'unknown',
       responseTime: r.responseTime ?? 0,
-      message: r.error ?? undefined,
-      ping: r.ping ?? undefined,
+      message: 'status' in r && r.status === 'degraded' ? 'no majority vote across workers' : undefined,
+      ping: undefined,
     }))
   },
 
@@ -276,3 +305,11 @@ export const MonitorService = {
     }
   },
 } as const
+
+function hashWorkerId(): number {
+  let h = 0
+  for (let i = 0; i < env.workerId.length; i++) {
+    h = (h * 31 + env.workerId.charCodeAt(i)) >>> 0
+  }
+  return h
+}

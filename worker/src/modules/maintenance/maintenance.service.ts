@@ -1,5 +1,8 @@
 import { HttpError } from '../../common/errors/http-error.js'
 import { MaintenanceRepository } from './maintenance.repository.js'
+import { and, eq, lte, gte } from 'drizzle-orm'
+import { maintenanceWindows } from './maintenance.schema.js'
+import { dbShared } from '../../database/shared.js'
 import type { MaintenanceWindowInput } from './maintenance.types.js'
 
 export function validateMaintenance(input: Partial<MaintenanceWindowInput>): MaintenanceWindowInput {
@@ -55,5 +58,13 @@ export const MaintenanceService = {
   async remove(id: number) {
     await this.get(id)
     await MaintenanceRepository.remove(id)
+  },
+
+  /** True jika target sedang dalam maintenance window aktif (applies ke semua monitor jika monitors kosong). */
+  async isTargetInMaintenance(targetId: number): Promise<boolean> {
+    const now = new Date()
+    const windows = await dbShared.select().from(maintenanceWindows)
+      .where(and(eq(maintenanceWindows.active, true), lte(maintenanceWindows.startTime, now), gte(maintenanceWindows.endTime, now)))
+    return windows.some((w) => (w.monitors ?? []).length === 0 || (w.monitors ?? []).includes(String(targetId)))
   },
 } as const

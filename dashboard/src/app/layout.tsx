@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Script from 'next/script'
 import { Geist, JetBrains_Mono, Space_Grotesk } from 'next/font/google'
 import { ThemeProvider } from 'next-themes'
 import './globals.css'
@@ -31,23 +32,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${geistSans.variable} ${jetbrainsMono.variable} ${spaceGrotesk.variable}`}
       suppressHydrationWarning
     >
-      <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function(){
-                try {
-                  var t = localStorage.getItem('ubig-theme');
-                  if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-                  document.documentElement.classList.add(t);
-                } catch(e) {}
-              })();
-            `,
-          }}
-        />
-      </head>
       <body className="antialiased">
-          <ThemeProvider
+        <Script id="theme-init" strategy="beforeInteractive">
+          {`
+            (function(){
+              try {
+                var t = localStorage.getItem('ubig-theme');
+                if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                document.documentElement.classList.add(t);
+              } catch(e) {}
+            })();
+          `}
+        </Script>
+        <ThemeProvider
             attribute="class"
             defaultTheme="system"
             enableSystem

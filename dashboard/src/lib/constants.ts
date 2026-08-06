@@ -8,6 +8,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Status Pages', href: '/status-pages', icon: 'file' },
   { label: 'Settings', href: '/settings', icon: 'settings' },
   { label: 'Maintenance', href: '/maintenance', icon: 'clock' },
+  { label: 'Cluster', href: '/cluster', icon: 'radar' },
 ]
 
 export const MONITOR_TYPES = [

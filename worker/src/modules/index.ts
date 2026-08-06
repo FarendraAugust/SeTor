@@ -15,9 +15,13 @@ import groupRoutes from './group/group.controller.js'
 import backupRoutes from './backup/backup.controller.js'
 import badgeRoutes from './badge/badge.controller.js'
 import metricsRoutes from './metrics/metrics.controller.js'
-import { bus } from './bus/bus.service.js'
+import internalRoutes from './internal/internal.controller.js'
 import { LeaderService } from './leader/leader.service.js'
 import { MonitorService } from './monitor/monitor.service.js'
+import { ReplicationService } from './replication/replication.service.js'
+import { SyncService } from './internal/sync.service.js'
+import { AnalysisService } from './analysis/analysis.service.js'
+import { MonitorRepository } from './monitor/monitor.repository.js'
 
 export function registerModules(app: Hono) {
   app.route('/auth', authRoutes)
@@ -36,15 +40,29 @@ export function registerModules(app: Hono) {
   app.route('/backup', backupRoutes)
   app.route('/badge', badgeRoutes)
   app.route('/metrics', metricsRoutes)
+  app.route('/internal', internalRoutes)
 
   LeaderService.start()
   MonitorService.start()
+  ReplicationService.start()
+  SyncService.start()
 
-  bus.connect().then(() => {
-    bus.subscribe('monitoring', (event) => {
-      console.log(`[bus] ${event.type} from ${event.source}`, event.data)
-    })
+  // Saat jadi leader: backfill hasil dari peer + rebuild state konsensus
+  LeaderService.onBecomeLeader(async () => {
+    try {
+      const rows = await ReplicationService.backfillFromPeers(new Date(Date.now() - 24 * 3600 * 1000))
+      if (rows.length > 0) {
+        // buang id asing (bentrok antar node; dedup via unique index)
+        const converted = rows.map((r) => {
+          const { id: _id, ...rest } = r as Record<string, unknown>
+          return { ...rest, checkedAt: new Date(String(r.checkedAt)) }
+        })
+        await MonitorRepository.insertMany(converted as never)
+        void AnalysisService.onResults(converted as never).catch((e: any) => console.error('[leader] consensus after backfill failed:', e?.message))
+      }
+      await AnalysisService.rebuild()
+    } catch (e: any) {
+      console.error('[leader] backfill failed:', e?.message)
+    }
   })
 }
-
-export { bus }

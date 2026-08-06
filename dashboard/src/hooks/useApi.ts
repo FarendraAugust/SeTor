@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { getAccessToken, monitorsApi, WORKER_URL } from '@/lib/api'
+import { getAccessToken, monitorsApi, getWorkerUrl } from '@/lib/api'
 import type { Heartbeat } from '@/types/monitor'
 
 export function useApiData<T>(fetcher: () => Promise<T>, deps: unknown[] = []) {
@@ -69,7 +69,7 @@ export function useMonitoringEvents(onEvent: (event: BusEvent) => void) {
       if (!token) return
       controller = new AbortController()
       try {
-        const res = await fetch(`${WORKER_URL}/dashboard/events`, {
+        const res = await fetch(`${getWorkerUrl()}/dashboard/events`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
         })

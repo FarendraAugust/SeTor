@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { dbShared } from '../../database/shared.js'
 import { statusPages } from './status-page.schema.js'
+import { ReplicationService } from '../replication/replication.service.js'
 import type { StatusPage, NewStatusPage } from './status-page.types.js'
 
 export const StatusPageRepository = {
@@ -16,15 +17,20 @@ export const StatusPageRepository = {
     return dbShared.select().from(statusPages).where(eq(statusPages.slug, slug)).then((r) => r[0])
   },
 
-  create(data: Partial<NewStatusPage>): Promise<StatusPage> {
-    return dbShared.insert(statusPages).values(data as NewStatusPage).returning().then((r) => r[0])
+  async create(data: Partial<NewStatusPage>): Promise<StatusPage> {
+    const [row] = await dbShared.insert(statusPages).values(data as NewStatusPage).returning()
+    await ReplicationService.record('status_pages', 'insert', row as unknown as Record<string, unknown>)
+    return row
   },
 
-  update(id: number, data: Partial<NewStatusPage>): Promise<StatusPage | undefined> {
-    return dbShared.update(statusPages).set(data).where(eq(statusPages.id, id)).returning().then((r) => r[0])
+  async update(id: number, data: Partial<NewStatusPage>): Promise<StatusPage | undefined> {
+    const [row] = await dbShared.update(statusPages).set(data).where(eq(statusPages.id, id)).returning()
+    if (row) await ReplicationService.record('status_pages', 'update', row as unknown as Record<string, unknown>)
+    return row
   },
 
-  remove(id: number): Promise<void> {
-    return dbShared.delete(statusPages).where(eq(statusPages.id, id)).then(() => {})
+  async remove(id: number): Promise<void> {
+    await dbShared.delete(statusPages).where(eq(statusPages.id, id))
+    await ReplicationService.record('status_pages', 'delete', { id })
   },
 } as const

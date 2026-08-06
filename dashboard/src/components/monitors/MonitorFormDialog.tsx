@@ -53,6 +53,8 @@ const DEFAULT_STATE = {
   selectedProviders: [] as string[],
   active: true,
   notificationThreshold: '',
+  resendNotification: false,
+  notificationInterval: '60',
 }
 
 interface Props {
@@ -84,6 +86,8 @@ export function MonitorFormDialog({ open, onOpenChange, monitorId, onSaved }: Pr
   const [dockerHost, setDockerHost] = useState(DEFAULT_STATE.dockerHost)
   const [selectedProviders, setSelectedProviders] = useState<string[]>(DEFAULT_STATE.selectedProviders)
   const [notificationThreshold, setNotificationThreshold] = useState(DEFAULT_STATE.notificationThreshold)
+  const [resendNotification, setResendNotification] = useState(DEFAULT_STATE.resendNotification)
+  const [notificationInterval, setNotificationInterval] = useState(DEFAULT_STATE.notificationInterval)
   const [copied, setCopied] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -114,6 +118,8 @@ export function MonitorFormDialog({ open, onOpenChange, monitorId, onSaved }: Pr
         setTags(m.tags ?? [])
         setSelectedProviders(m.notificationIds ?? [])
         setNotificationThreshold(m.notificationThreshold ? String(m.notificationThreshold) : '')
+        setResendNotification(m.resendNotification ?? false)
+        setNotificationInterval(m.notificationInterval ? String(m.notificationInterval) : '60')
         setJsonQueryPath(m.jsonQuery ?? '')
         setExpectedValue(m.expectedValue ?? '')
         setSteamGameId(m.steamGameId ?? '')
@@ -228,6 +234,8 @@ export function MonitorFormDialog({ open, onOpenChange, monitorId, onSaved }: Pr
         upsideDown,
         notificationIds: selectedProviders,
         notificationThreshold: notificationThreshold.trim() ? Number(notificationThreshold) : null,
+        resendNotification,
+        notificationInterval: notificationInterval.trim() ? Number(notificationInterval) : null,
         jsonQuery: type === 'json-query' ? (jsonQueryPath || null) : (prev?.jsonQuery ?? null),
         expectedValue: type === 'keyword' || type === 'json-query' ? (expectedValue || null) : (prev?.expectedValue ?? null),
         steamGameId: type === 'steam' ? (steamGameId || null) : (prev?.steamGameId ?? null),
@@ -542,20 +550,46 @@ export function MonitorFormDialog({ open, onOpenChange, monitorId, onSaved }: Pr
                 )}
 
                 <div className="space-y-1.5 pt-1 border-t border-border/50">
-                  <label className="block text-sm font-medium">Notification Threshold (ms)</label>
+                  <label className="block text-sm font-medium">Alert setelah N kali down berturut-turut</label>
                   <Input
                     type="number"
-                    min={0}
+                    min={1}
                     value={notificationThreshold}
                     onChange={e => setNotificationThreshold(e.target.value)}
-                    placeholder="e.g. 2000"
+                    placeholder="1 (langsung)"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Only notify when a monitor goes down with a response time above this value.
-                    Small lag / slightly high ping below the threshold will be recorded but won&apos;t bother your bot.
-                    Leave empty to always notify.
+                    Kirim notifikasi hanya setelah target down selama N siklus check berturut-turut.
+                    Contoh: 3 = alert pada kegagalan ke-3 (mengurangi false-positive).
+                    Kosongkan = langsung alert saat pertama down.
                   </p>
                 </div>
+
+                <label className="flex items-center gap-2 cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={resendNotification}
+                    onChange={e => setResendNotification(e.target.checked)}
+                    className="size-4 rounded border-input text-primary accent-primary"
+                  />
+                  <span className="text-sm font-medium">Kirim ulang notifikasi saat masih down</span>
+                </label>
+
+                {resendNotification && (
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium">Interval resend (detik)</label>
+                    <Input
+                      type="number"
+                      min={10}
+                      value={notificationInterval}
+                      onChange={e => setNotificationInterval(e.target.value)}
+                      placeholder="60"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Selama target masih down, notifikasi dikirim ulang setiap interval ini.
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
 

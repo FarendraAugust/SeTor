@@ -8,6 +8,20 @@ export type CheckResult = {
   error: string | null
 }
 
+async function resolveProxy(target: Target): Promise<string | undefined> {
+  if (!target.proxyId) return undefined
+  try {
+    const { ProxyRepository } = await import('../proxy/proxy.repository.js')
+    const proxies = await ProxyRepository.findAll()
+    const proxy = proxies.find((p) => String(p.id) === target.proxyId)
+    if (!proxy) return undefined
+    const auth = proxy.auth?.username ? `${encodeURIComponent(proxy.auth.username)}:${encodeURIComponent(proxy.auth.password ?? '')}@` : ''
+    return `${proxy.protocol}://${auth}${proxy.host}:${proxy.port}`
+  } catch {
+    return undefined
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -60,6 +74,7 @@ async function checkHttp(target: Target, now: Date): Promise<CheckResult> {
       method: target.method,
       redirect: 'manual',
       signal: controller.signal,
+      proxy: await resolveProxy(target),
       tls: { rejectUnauthorized: !target.ignoreTls },
     } as RequestInit)
     clearTimeout(timer)
@@ -130,6 +145,7 @@ async function checkKeyword(target: Target): Promise<CheckResult> {
       method: target.method,
       signal: controller.signal,
       redirect: 'follow',
+      proxy: await resolveProxy(target),
       tls: { rejectUnauthorized: !target.ignoreTls },
     } as RequestInit)
     clearTimeout(timer)
@@ -175,6 +191,7 @@ async function checkJsonQuery(target: Target): Promise<CheckResult> {
       method: target.method,
       signal: controller.signal,
       redirect: 'follow',
+      proxy: await resolveProxy(target),
       tls: { rejectUnauthorized: !target.ignoreTls },
     } as RequestInit)
     clearTimeout(timer)

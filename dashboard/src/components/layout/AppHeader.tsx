@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useAuth } from '@/context/AuthContext'
+import { ClusterBadge } from '@/components/cluster/ClusterBadge'
 import { Loader2, LogOut, KeyRound, User as UserIcon } from 'lucide-react'
 
 function ChangePasswordDialog({
@@ -142,6 +143,8 @@ export function AppHeader() {
       </div>
 
       <ThemeToggle />
+
+      <ClusterBadge />
 
       <Separator orientation="vertical" className="h-4" />
 

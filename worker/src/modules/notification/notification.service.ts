@@ -12,11 +12,12 @@ type DispatchPayload = {
 
 async function postJson(url: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
   try {
-    await fetch(url, {
+    const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body),
     })
+    console.log(`[notify-http] ${new URL(url).host} -> ${r.status}`)
   } catch (e: any) {
     console.error(`[notify] post failed: ${url} -> ${e.message}`)
   }

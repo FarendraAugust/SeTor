@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 import { TargetRepository } from '../target/target.repository.js'
 import { MonitorRepository } from './monitor.repository.js'
 import { env } from '../../config/env.js'
+import { bus } from '../bus/bus.service.js'
+import { LeaderService } from '../leader/leader.service.js'
+import { AnalysisService } from '../analysis/analysis.service.js'
+import { SyncService } from '../internal/sync.service.js'
 
 const router = new Hono()
 
@@ -17,7 +21,7 @@ router.all('/push/:token', async (c) => {
   else if (body && (body.status === 'down' || body.status === 'up')) status = body.status
 
   const checkedAt = new Date()
-  await MonitorRepository.insert({
+  const row = await MonitorRepository.insert({
     targetId: target.id,
     targetName: target.name,
     status,
@@ -29,7 +33,6 @@ router.all('/push/:token', async (c) => {
     workerId: env.workerId,
   })
 
-  const { bus } = await import('../bus/bus.service.js')
   await bus.emit('monitoring', 'monitoring.result', {
     targetId: target.id,
     targetName: target.name,
@@ -39,6 +42,13 @@ router.all('/push/:token', async (c) => {
     error: status === 'down' ? 'pushed down' : null,
     checkedAt,
   })
+
+  // Leader proses langsung; follower kirim ke leader
+  if (LeaderService.isLeader()) {
+    void AnalysisService.onResults([row])
+  } else {
+    void SyncService.pushResults()
+  }
 
   return c.json({ ok: true, status })
 })

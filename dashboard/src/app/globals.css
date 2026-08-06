@@ -48,6 +48,10 @@
   --color-up: var(--up);
   --color-down: var(--down);
   --color-pending: var(--pending);
+  --color-signal: var(--signal);
+  --color-gold: var(--gold);
+  --color-alarm: var(--alarm);
+  --color-tick: var(--tick);
 }
 
 :root {
@@ -89,6 +93,10 @@
   --up: #22c55e;
   --down: #ef4444;
   --pending: #eab308;
+  --signal: #0f9d58;
+  --gold: #a16207;
+  --alarm: #dc2626;
+  --tick: #5b6b7c;
 }
 
 .dark {
@@ -129,6 +137,10 @@
   --up: #22c55e;
   --down: #ef4444;
   --pending: #eab308;
+  --signal: #3be08a;
+  --gold: #e8b64c;
+  --alarm: #ff6b5e;
+  --tick: #66798c;
 }
 
 @layer base {

@@ -1,27 +1,23 @@
-import postgres from 'postgres'
 import { env } from '../../config/env.js'
 import type { BusEvent, BusHandler } from './bus.types.js'
 
+/**
+ * Event bus lokal (in-process). Tidak lagi memakai PG LISTEN/NOTIFY karena
+ * shared DB kini replikasi per-node. Event monitoring follower dikirim ke
+ * leader lewat /internal/sync/results, lalu leader yang menyalurkan ke SSE.
+ */
 class EventBus {
-  private sql!: ReturnType<typeof postgres>
   private handlers = new Map<string, Set<BusHandler>>()
   readonly workerId: string = env.workerId
 
   async connect() {
-    this.sql = postgres(env.sharedDatabaseUrl)
+    // no-op — bus lokal
   }
 
-  async subscribe(channel: string, handler: BusHandler) {
+  subscribe(channel: string, handler: BusHandler) {
     const set = this.handlers.get(channel) ?? new Set()
     set.add(handler)
     this.handlers.set(channel, set)
-
-    if (set.size === 1) {
-      await this.sql.listen(channel, (payload: string) => {
-        const event: BusEvent = JSON.parse(payload)
-        for (const fn of this.handlers.get(channel) ?? []) fn(event)
-      })
-    }
   }
 
   unsubscribe(channel: string, handler: BusHandler) {
@@ -33,11 +29,17 @@ class EventBus {
 
   async emit(channel: string, type: string, data: unknown) {
     const event: BusEvent = { type, data, source: this.workerId, timestamp: Date.now() }
-    await this.sql.notify(channel, JSON.stringify(event))
+    for (const fn of this.handlers.get(channel) ?? []) {
+      try {
+        await fn(event)
+      } catch (e: any) {
+        console.error(`[bus] handler error on ${channel}: ${e.message}`)
+      }
+    }
   }
 
   async disconnect() {
-    await this.sql.end()
+    this.handlers.clear()
   }
 }
 

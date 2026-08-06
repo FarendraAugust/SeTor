@@ -1,4 +1,5 @@
 import type { AuthUser } from '@/types/auth'
+import type { WorkerRow } from '@/types/worker'
 import type {
   ApiKey,
   BackupData,
@@ -13,6 +14,23 @@ import type {
 import type { MonitorType } from '@/types/common'
 
 export const WORKER_URL = (process.env.NEXT_PUBLIC_WORKER_URL ?? 'http://localhost:3001').replace(/\/+$/, '')
+
+/** Daftar worker URLs untuk failover cluster: comma-separated (NEXT_PUBLIC_WORKER_URLS) */
+export const WORKER_URLS = (process.env.NEXT_PUBLIC_WORKER_URLS ?? WORKER_URL)
+  .split(',')
+  .map((s) => s.trim().replace(/\/+$/, ''))
+  .filter(Boolean)
+
+let currentWorkerIndex = 0
+
+export function getWorkerUrl(): string {
+  return WORKER_URLS[Math.min(currentWorkerIndex, WORKER_URLS.length - 1)]
+}
+
+function rotateWorkerUrl(): string {
+  currentWorkerIndex = (currentWorkerIndex + 1) % WORKER_URLS.length
+  return getWorkerUrl()
+}
 
 export class ApiError extends Error {
   status: number
@@ -34,14 +52,14 @@ export function getAccessToken(): string | null {
   return accessToken
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function requestOnce<T>(url: string, path: string, init: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     ...(init.headers as Record<string, string> | undefined),
   }
   if (init.body) headers['Content-Type'] = 'application/json'
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
 
-  const res = await fetch(`${WORKER_URL}${path}`, {
+  const res = await fetch(`${url}${path}`, {
     ...init,
     headers,
     credentials: 'include',
@@ -53,6 +71,31 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status, message)
   }
   return data as T
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const attempts = WORKER_URLS.length
+  for (let i = 0; i < attempts; i++) {
+    const url = getWorkerUrl()
+    try {
+      return await requestOnce<T>(url, path, init)
+    } catch (e: any) {
+      const isNetworkError = !(e instanceof ApiError)
+      const isLeaderDown = e instanceof ApiError && (e.status === 503 || e.status === 502)
+      if (isNetworkError || isLeaderDown) {
+        rotateWorkerUrl()
+        continue
+      }
+      throw e
+    }
+  }
+  throw new ApiError(503, 'All workers unreachable')
+}
+
+export const workerApi = {
+  list() {
+    return request<{ workers: WorkerRow[] }>('/workers')
+  },
 }
 
 export const authApi = {
@@ -607,8 +650,8 @@ export const badgeApi = {
     if (opts.color) qs.set('color', opts.color)
     if (opts.style) qs.set('style', opts.style)
     const q = qs.toString()
-    return `${WORKER_URL}/badge/${id}${q ? `?${q}` : ''}`
+    return `${getWorkerUrl()}/badge/${id}${q ? `?${q}` : ''}`
   },
 }
 
-export const metricsUrl = `${WORKER_URL}/metrics`
+export const metricsUrl = `${getWorkerUrl()}/metrics`
